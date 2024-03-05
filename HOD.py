@@ -272,17 +272,17 @@ def F_k_hmf_func_2(k, theta, M_min, sigma_logM, M_sat, alpha, z,
 def omega_inner_integral_1(theta, M_min, sigma_logM, M_sat, alpha, z,
                            comoving_distance_z, crit_dens_rescaled, M_h_array, HMF_array, N_G,
                            NCEN, NSAT, bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS):
-    if (USE_MY_PS):
-        k_array = np.logspace(-3.5, 3.5, 2500)
-        dlogk = np.log(k_array[1]/k_array[0])
-    else:
-        k_array = hmf_k
-        dlogk = np.log(hmf_k[1]/hmf_k[0])
-    PS_1 = [PS_1h(k, M_min, sigma_logM, M_sat, alpha, z,\
-                  crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN, NSAT) for k in k_array]
-    factor = [factor_k(k, theta, comoving_distance_z) for k in k_array]
-    # return np.sum(k_array * np.array(PS_1) * factor) * dlogk
-    # return np.trapz(np.array(PS_1) * factor, k_array)
+    if 1:
+        if USE_MY_PS:
+            k_array = np.logspace(-3.5, 3.5, 2500)
+            dlogk = np.log(k_array[1]/k_array[0])
+        else:
+            k_array = hmf_k
+            dlogk = np.log(hmf_k[1]/hmf_k[0])
+        PS_1 = [PS_1h(k, M_min, sigma_logM, M_sat, alpha, z,\
+                    crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN, NSAT) for k in k_array]
+        factor = [factor_k(k, theta, comoving_distance_z) for k in k_array]
+        return np.sum(k_array * np.array(PS_1) * factor) * dlogk
     _args = (theta, M_min, sigma_logM, M_sat, alpha, z,\
              crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN, NSAT, comoving_distance_z)
     return integrate.quad(F_k_hmf_func_1, 1e-3, 1e5, limit=10000, epsabs=1e-3, args = _args)[0]
@@ -290,19 +290,19 @@ def omega_inner_integral_1(theta, M_min, sigma_logM, M_sat, alpha, z,
 def omega_inner_integral_2(theta, M_min, sigma_logM, M_sat, alpha, z,
                            comoving_distance_z, crit_dens_rescaled, M_h_array, HMF_array, N_G,
                            NCEN, NSAT, bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS):
-    if (USE_MY_PS):
-        k_array = np.logspace(-3.5, 3.5, 2500)
-        dlogk = np.log(k_array[1]/k_array[0])
-    else:
-        k_array = hmf_k
-        dlogk = np.log(hmf_k[1]/hmf_k[0])
-    PS_2 = [PS_2h(k, M_min, sigma_logM, M_sat, alpha, z, crit_dens_rescaled,\
-                  M_h_array, HMF_array, N_G, NCEN, NSAT, bias, hmf_k, hmf_PS,\
-                  D_ratio, _PS_NORM_, USE_MY_PS) for k in k_array]
-    factor = [factor_k(k, theta, comoving_distance_z) for k in k_array]
-    PS_2_corr =  np.array(PS_2) if USE_MY_PS else hmf_PS * np.array(PS_2)
-    # return np.sum(k_array * PS_2_corr * factor) * dlogk
-    # return np.trapz(np.array(PS_2_corr) * factor, k_array)
+    if 1:
+        if USE_MY_PS:
+            k_array = np.logspace(-3.5, 3.5, 2500)
+            dlogk = np.log(k_array[1]/k_array[0])
+        else:
+            k_array = hmf_k
+            dlogk = np.log(hmf_k[1]/hmf_k[0])
+        PS_2 = [PS_2h(k, M_min, sigma_logM, M_sat, alpha, z, crit_dens_rescaled,\
+                      M_h_array, HMF_array, N_G, NCEN, NSAT, bias, hmf_k, hmf_PS,\
+                      D_ratio, _PS_NORM_, USE_MY_PS) for k in k_array]
+        factor = [factor_k(k, theta, comoving_distance_z) for k in k_array]
+        PS_2_corr =  np.array(PS_2) if USE_MY_PS else hmf_PS * np.array(PS_2)
+        return np.sum(k_array * PS_2_corr * factor) * dlogk
     _args = (theta, M_min, sigma_logM, M_sat, alpha, z,\
              crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN,\
              NSAT, bias, hmf_k, hmf_PS, D_ratio, _PS_NORM_, comoving_distance_z, USE_MY_PS)
@@ -407,8 +407,8 @@ def get_AVG_f_sat(M_min, sigma_logM, M_sat, alpha, z, LOG_INTGR = False):
 ###################################################################################################
 #### INITIALIZE HMF ###############################################################################
 def init_lookup_table(z, REWRITE_TBLS = False):
-    _HERE_PATH = os.path.split(os.path.dirname(os.path.abspath('')))[0]
-    FOLDERPATH = _HERE_PATH + '/GALESS/galess/data/HMF_tables/'
+    _HERE_PATH = os.path.dirname(os.path.abspath(''))
+    FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/'
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1, 2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):
