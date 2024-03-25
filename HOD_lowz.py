@@ -93,8 +93,7 @@ def omega_z_component_2(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _
                                   crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN, NSAT,
                                   k_array, dlogk, bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS)
 
-def omega(ttt, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array):
-    k_array = np.logspace(-5, 4, 10000)
+def omega(ttt, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array, k_array = np.logspace(-5, 4, 10000)):
     dlogk = np.log(k_array[1]/k_array[0])
 
     _PS_NORM_ = HOD.norm_power_spectrum()
@@ -107,4 +106,5 @@ def omega(ttt, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array):
     intg2 = np.array([omega_z_component_2(z, ttt, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _PS_NORM_, k_array, dlogk) for z in z_array])
     I1 = np.array([np.trapz(intg1.T[i] * factor_z, z_array) for i in range(len(ttt))])
     I2 = np.array([np.trapz(intg2.T[i] * factor_z, z_array) for i in range(len(ttt))])
+    # I1[I1<0] = 0
     return I1, I2
