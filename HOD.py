@@ -83,7 +83,7 @@ def _sigma(r, z, D_ratio, _PS_NORM_):
     #intgr = lambda x: power_spectrum(x, z, D_ratio, _PS_NORM_)/
     #                  \(2*np.pi**2)*np.power(x,2)*W_F_transf(x, r)**2
     #sigma_sq = integrate.quad(intgr, 0, 1000)[0]
-    k_array = np.logspace(-4, 4, 1000)
+    k_array = np.logspace(-5, 4, 10000)
     dlogk = np.log(k_array[1]/k_array[0])
     intgrnd = np.zeros(0)
     for x in k_array:
@@ -96,7 +96,7 @@ def _dlnsdlnm(r, sigma, z, D_ratio, _PS_NORM_):
     #intgr = lambda x: power_spectrum(x, z, D_ratio, _PS_NORM_)
     #                  \*np.power(x,2)*W_F_transf(x, r)*dW_dlnR(x, r)
     #I_R = integrate.quad(intgr, 0, 1000, limit=2000)[0]
-    k_array = np.logspace(-4, 4, 1000)
+    k_array = np.logspace(-5, 4, 10000)
     dlogk = np.log(k_array[1]/k_array[0])
     intgrnd = np.zeros(0)
     for x in k_array:
@@ -134,7 +134,8 @@ def N_cen(M_h, M_min, sigma_logM):
     return 0.5*(1+special.erf((np.log10(M_h)-np.log10(M_min))/(np.sqrt(2)*sigma_logM)))
 
 def N_sat(M_h, M_sat, alpha, M_min, sigma_logM):
-    M_cut = np.power(M_min, -0.5)
+    M_cut = np.power(M_min, -0.5) #Harikane 2018
+    # M_cut = np.power(0.76*np.log10(M_sat) + 2.3, 10) # Conroy et al. (2006)
     return  N_cen(M_h, M_min, sigma_logM)*np.power((M_h-M_cut)/M_sat,alpha)
 
 def N_tot(M_h, M_sat, alpha, M_min, sigma_logM):
@@ -150,7 +151,7 @@ def n_g(M_min, sigma_logM, M_sat, alpha, z, M_h_array, HMF_array):
     #return np.sum(M_h_array*HMF_array*NTOT) * dlogk
 
 def get_c_from_M_h(M_h, z):
-    if(0):
+    if 0:
         #Eq.4 https://iopscience.iop.org/article/10.1086/367955/pdf
         c_norm = 8
         return (c_norm) / (1+z) * np.power(M_h / (1.4e14), -0.13)
@@ -198,6 +199,7 @@ def halo_bias_TINKER(nu, rc = 1.686):
     b = 1.5
     C = 0.019 + 0.107 * y + 0.19 * np.exp(- (4 / y) ** 4)
     c = 2.4
+    nu = np.sqrt(nu)
     _Atrm = A * np.power(nu,a) / (np.power(nu,a) + rc**a)
     _Btrm = B * np.power(nu,b)
     _Ctrm = C * np.power(nu,c)
@@ -236,7 +238,7 @@ def omega_inner_integral(theta, M_min, sigma_logM, M_sat, alpha, z, comoving_dis
                         crit_dens_rescaled, M_h_array, HMF_array, N_G, NCEN, NSAT,
                         bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS):
     if (USE_MY_PS):
-        k_array = np.logspace(-3, 3, 2000)
+        k_array = np.logspace(-5, 4, 10000)
         dlogk = np.log(k_array[1]/k_array[0])
     else:
         k_array = hmf_k
@@ -274,7 +276,7 @@ def omega_inner_integral_1(theta, M_min, sigma_logM, M_sat, alpha, z,
                            NCEN, NSAT, bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS):
     if 1:
         if USE_MY_PS:
-            k_array = np.logspace(-3.5, 3.5, 2500)
+            k_array = np.logspace(-5, 4, 10000)
             dlogk = np.log(k_array[1]/k_array[0])
         else:
             k_array = hmf_k
@@ -292,7 +294,7 @@ def omega_inner_integral_2(theta, M_min, sigma_logM, M_sat, alpha, z,
                            NCEN, NSAT, bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS):
     if 1:
         if USE_MY_PS:
-            k_array = np.logspace(-3.5, 3.5, 2500)
+            k_array = np.logspace(-5, 4, 10000)
             dlogk = np.log(k_array[1]/k_array[0])
         else:
             k_array = hmf_k
@@ -320,9 +322,12 @@ def omega_z_component_1(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _
                                   nu_array, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS)
 
 def omega_z_component_2(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _PS_NORM_,
-                        USE_MY_PS = True, REWRITE_TBLS = False):
+                        USE_MY_PS = True, REWRITE_TBLS = False, USE_MY_BIAS = False):
     M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z, REWRITE_TBLS)
-    bias = Tinker10(nu=nu_array).bias() if 1 else halo_bias_TINKER(nu_array)
+    if USE_MY_BIAS:
+        bias = halo_bias_TINKER(nu_array)
+    else:
+        bias = Tinker10(nu=nu_array).bias()
     D_ratio   = (D_growth_factor(z)/D_growth_factor(0))**2 if z != 0 else 1
     N_G  = n_g(M_min, sigma_logM, M_sat, alpha, z, M_h_array, HMF_array)
     comoving_distance_z = cosmo.comoving_distance(z).value
@@ -332,7 +337,7 @@ def omega_z_component_2(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _
                                   bias, hmf_k, hmf_PS, _PS_NORM_, D_ratio, USE_MY_PS)
 
 def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-          USE_MY_PS = True, REWRITE_TBLS = False):
+          USE_MY_PS = True, REWRITE_TBLS = False, USE_MY_BIAS = False):
     _PS_NORM_ = norm_power_spectrum()
     M_h_array, _, __, ___, ____ = init_lookup_table(0, REWRITE_TBLS)
     NCEN = N_cen(M_h_array, M_min, sigma_logM)
@@ -342,16 +347,17 @@ def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
     intg1 = [omega_z_component_1(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _PS_NORM_,\
          USE_MY_PS = USE_MY_PS, REWRITE_TBLS = REWRITE_TBLS) for z in z_array]
     intg2 = [omega_z_component_2(z, theta, M_min, sigma_logM, M_sat, alpha, NCEN, NSAT, _PS_NORM_,\
-         USE_MY_PS = USE_MY_PS, REWRITE_TBLS = REWRITE_TBLS) for z in z_array]
+         USE_MY_PS = USE_MY_PS, REWRITE_TBLS = REWRITE_TBLS, USE_MY_BIAS = USE_MY_BIAS) for z in z_array]
     I1 = np.trapz(np.array(intg1) * factor_z, z_array)
     I2 = np.trapz(np.array(intg2) * factor_z, z_array)
     return I1, I2
+
 def omega_array(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-                USE_MY_PS = True, REWRITE_TBLS = False):
+                USE_MY_PS = True, REWRITE_TBLS = False, USE_MY_BIAS = False):
     omega1h, omega2h = np.zeros(0), np.zeros(0)
     for tht in tqdm(theta):
         o_1h, o_2h = omega(tht, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-                           USE_MY_PS = USE_MY_PS, REWRITE_TBLS=REWRITE_TBLS)
+                           USE_MY_PS = USE_MY_PS, REWRITE_TBLS=REWRITE_TBLS, USE_MY_BIAS = USE_MY_BIAS)
         omega1h, omega2h = np.append(omega1h, o_1h), np.append(omega2h, o_2h)
     omega1h[omega1h<0] = 0
     omega1h[(theta/(1/206265))>50] = 0
