@@ -17,17 +17,17 @@ h = cosmo.H(0).value/100
 c_light  = 299792.458 #speed of light km/s
 ###################################################################################################
 ### HALO OCCUPATION DISTRIBUTION ##################################################################
-def N_cen(M_h, M_min, sigma_logM):
-    return 0.5*(1+special.erf((np.log10(M_h)-np.log10(M_min))/(np.sqrt(2)*sigma_logM)))
+def N_cen(M_h, M_min, sigma_logM, DC = 1):
+    return DC * 0.5*(1+special.erf((np.log10(M_h)-np.log10(M_min))/(np.sqrt(2)*sigma_logM)))
 
-def N_sat(M_h, M_sat, alpha, M_min, sigma_logM):
+def N_sat(M_h, M_sat, alpha, M_min, sigma_logM, DC = 1):
     M_cut = np.power(M_min, -0.5) #Harikane 2018
-    return N_cen(M_h, M_min, sigma_logM)*np.power((M_h-M_cut)/M_sat,alpha)
+    return DC * N_cen(M_h, M_min, sigma_logM) * np.power((M_h-M_cut)/M_sat,alpha)
 
 def N_tot(M_h, M_sat, alpha, M_min, sigma_logM, DC = 1):
     return DC * (N_cen(M_h, M_min, sigma_logM) + N_sat(M_h, M_sat, alpha, M_min, sigma_logM))
 
-def n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array):
+def gal_density_n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array):
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM)
     return np.trapz(HMF_array*NTOT, M_h_array)
 
@@ -198,7 +198,7 @@ def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm):
     _N_G, _dVdz = np.zeros(0),  np.zeros(0)
     for z in z_array:
         M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
-        _N_G  = np.append(_N_G, n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array))
+        _N_G  = np.append(_N_G, gal_density_n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array))
         _dVdz = np.append(_dVdz, cosmo.comoving_distance(z).value**2 * c_light / cosmo.H(z).value)
     return np.trapz(_N_G * _dVdz * N_z_nrm, z_array)/np.trapz(_dVdz * N_z_nrm, z_array)
 
