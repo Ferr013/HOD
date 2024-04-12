@@ -12,6 +12,7 @@ from hmf import MassFunction
 from halomod.bias import Tinker10
 from astropy.cosmology import Planck15
 cosmo = Planck15 #FlatLambdaCDM(H0=67.74, Om0=0.3089, Tcmb0=2.725)
+sigma_8 = 0.8159
 h = cosmo.H(0).value/100
 c_light  = 299792.458 #speed of light km/s
 ###################################################################################################
@@ -75,11 +76,16 @@ def init(mem):
 
 def omega_z_component_single(args):
     job_id, shape, z, _args_ = args
-    theta, NCEN, NSAT, REWRITE_TBLS = _args_
+    theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS = _args_
     shmem = SharedMemory(name=f'{mem_id}', create=False)
     shres = np.ndarray(shape, buffer=shmem.buf, dtype=np.float64)
-    M_h_array, HMF_array, nu_array, k_array, hmf_PS, U_FT = init_lookup_table(z, REWRITE_TBLS)
-    bias = Tinker10(nu=nu_array).bias()
+    if PRECOMP_UFT:
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS, U_FT = init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS)
+    else:
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS = init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS)
+        crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
+        U_FT = np.array([u_FT(k, M_h_array, z, crit_dens_rescaled) for k in k_array])
+    bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
     N_G = np.trapz(HMF_array*(NCEN + NSAT), M_h_array)
     comoving_distance_z = cosmo.comoving_distance(z).value
     oz1, oz2 = omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array,
@@ -87,7 +93,7 @@ def omega_z_component_single(args):
     shres[job_id, 0, :], shres[job_id, 1, :] = oz1, oz2
     return
 
-def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, REWRITE_TBLS, cores=None):
+def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, cores=None):
     if cores is None:
         if len(z_array) <= multiprocessing.cpu_count():
             cores = len(z_array)
@@ -95,14 +101,14 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, REWRITE_TBLS, c
             print('MORE Z BINS THAN CORES, THE CODE IS NOT SMART ENOUGH TO HANDLE THIS YET')
             raise ValueError
             #cores = multiprocessing.cpu_count()
-    _args_ = theta_array, NCEN, NSAT, REWRITE_TBLS
-    shape = (int(cores), 2, len(theta_array))
+    _args_ = theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS
+    shape = (len(z_array), 2, len(theta_array))
     args =  [(i, shape, z_array[i], _args_) for i in range(int(cores))]
     exit = False
     try:
         global mem_id
         mem_id = str(uuid.uuid1())[:30] #Avoid OSError: [Errno 63]
-        nbytes = (2 + int(cores) + len(theta_array)) * np.float64(1).nbytes
+        nbytes = (2 * len(z_array) * len(theta_array)) * np.float64(1).nbytes
         shd_mem = SharedMemory(name=f'{mem_id}', create=True, size=nbytes)
         method = 'spawn'
         if sys.platform.startswith('linux'):
@@ -128,34 +134,42 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, REWRITE_TBLS, c
     return z_h_t_array
 
 def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-          REWRITE_TBLS = False, cores=None):
-    M_h_array, __, ___, ____, _____, _______ = init_lookup_table(0, REWRITE_TBLS)
+          PRECOMP_UFT = False, REWRITE_TBLS = False, cores=None):
+    if PRECOMP_UFT:
+        M_h_array, __, ___, ____, _____, _______ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS)
+    else:
+        M_h_array, __, ___, ____, _____ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS)
     NCEN = N_cen(M_h_array, M_min, sigma_logM)
     NSAT = N_sat(M_h_array, M_sat, alpha, M_min, sigma_logM)
     H_z = [cosmo.H(z).value for z in z_array]
     factor_z = np.power(np.array(N_z_nrm), 2) / (c_light / np.array(H_z))
-    itg = omega_z_component_parallel(z_array, theta, NCEN, NSAT, REWRITE_TBLS, cores)
+    itg = omega_z_component_parallel(z_array, theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, cores)
     I1 = np.array([np.trapz(itg[:,0,i] * factor_z, z_array) for i in range(len(theta))])
     I2 = np.array([np.trapz(itg[:,1,i] * factor_z, z_array) for i in range(len(theta))])
     return I1, I2
 ###################################################################################################
 #### INITIALIZE HMF ###############################################################################
-def init_lookup_table(z, REWRITE_TBLS = False):
+def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = True):
     _HERE_PATH = os.path.dirname(os.path.abspath(''))
     FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/'
+    min_lnk, max_ln_k, step_lnk = -11.1, 13.6, 0.00005
+    if LOW_RES:
+        FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
+        min_lnk, max_ln_k, step_lnk = -11.5, 11.5, 0.001
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):
             hmf_mass, hmf_dndm, hmf_nu = np.loadtxt(FPATH, delimiter=',')
             FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'_PS.txt'
             hmf_k, hmf_PS = np.loadtxt(FPATH, delimiter=',')
-            FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'_U.txt'
-            hmf_U_FT = np.loadtxt(FPATH, delimiter=',')
+            if PRECOMP_UFT:
+                FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'_U.txt'
+                hmf_U_FT = np.loadtxt(FPATH, delimiter=',')
         else:
             print(f'Calculating HMF table at redshift {z:.2f}')
             hmf = MassFunction(Mmin = 9, Mmax = 18, dlog10m = 0.025,
-                               lnk_min = -11.1, lnk_max = 13.6, dlnk=0.00005,
-                               z=z, hmf_model = "Behroozi", sigma_8 = 0.8159, cosmo_model = cosmo)
+                               lnk_min = min_lnk, lnk_max = max_ln_k, dlnk=step_lnk,
+                               z=z, hmf_model = "Behroozi", sigma_8 = sigma_8, cosmo_model = cosmo)
             hmf_mass = hmf.m / h
             hmf_dndm = hmf.dndm * h**4
             hmf_nu   = hmf.nu
@@ -167,10 +181,14 @@ def init_lookup_table(z, REWRITE_TBLS = False):
             hmf_PS = hmf_PS_Nln
             np.savetxt(FPATH, (hmf_k, hmf_PS),  delimiter=',')
             FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'_U.txt'
-            crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
-            hmf_U_FT = np.array([u_FT(k, hmf_mass, z, crit_dens_rescaled) for k in hmf_k])
-            np.savetxt(FPATH, hmf_U_FT,  delimiter=',')
-        return hmf_mass, hmf_dndm, hmf_nu, hmf_k, hmf_PS, hmf_U_FT
+            if PRECOMP_UFT:
+                crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
+                hmf_U_FT = np.array([u_FT(k, hmf_mass, z, crit_dens_rescaled) for k in hmf_k])
+                np.savetxt(FPATH, hmf_U_FT,  delimiter=',')
+        if PRECOMP_UFT:
+            return hmf_mass, hmf_dndm, hmf_nu, hmf_k, hmf_PS, hmf_U_FT
+        else:
+            return hmf_mass, hmf_dndm, hmf_nu, hmf_k, hmf_PS
     else:
         print(FOLDERPATH)
         raise ValueError('Folder does not exist.')
@@ -184,25 +202,29 @@ def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm):
         _dVdz = np.append(_dVdz, cosmo.comoving_distance(z).value**2 * c_light / cosmo.H(z).value)
     return np.trapz(_N_G * _dVdz * N_z_nrm, z_array)/np.trapz(_dVdz * N_z_nrm, z_array)
 
-def get_AVG_N_tot(M_min, sigma_logM, M_sat, alpha, z):
-    M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
+def get_AVG_N_tot(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, n_g=None):
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM)
+    if n_g is not None:
+        return np.trapz(HMF_array*NTOT, M_h_array)/n_g
     return np.trapz(HMF_array*NTOT, M_h_array)/np.trapz(HMF_array, M_h_array)
 
-def get_AVG_Host_Halo_Mass(M_min, sigma_logM, M_sat, alpha, z):
-    M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
+def get_AVG_Host_Halo_Mass(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, n_g=None):
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM)
+    if n_g is not None:
+        return np.trapz(M_h_array*HMF_array*NTOT, M_h_array)/n_g
     return np.trapz(M_h_array*HMF_array*NTOT, M_h_array)/np.trapz(HMF_array*NTOT, M_h_array)
 
-def get_EFF_gal_bias(M_min, sigma_logM, M_sat, alpha, z):
-    M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
-    bias = Tinker10(nu=nu_array).bias()
+def get_EFF_gal_bias(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, nu_array, n_g=None):
+    bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM)
+    if n_g is not None:
+        return np.trapz(bias*HMF_array*NTOT, M_h_array)/n_g
     return np.trapz(bias*HMF_array*NTOT, M_h_array)/np.trapz(HMF_array*NTOT, M_h_array)
 
-def get_AVG_f_sat(M_min, sigma_logM, M_sat, alpha, z):
-    M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
+def get_AVG_f_sat(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, n_g=None):
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM)
     NSAT = N_sat(M_h_array, M_sat, alpha, M_min, sigma_logM)
+    if n_g is not None:
+        return np.trapz(HMF_array*NSAT, M_h_array)/n_g
     return np.trapz(HMF_array*NSAT, M_h_array)/np.trapz(HMF_array*NTOT, M_h_array)
 ###################################################################################################
