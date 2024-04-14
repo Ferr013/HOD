@@ -11,6 +11,8 @@ import uuid
 from hmf import MassFunction
 from halomod.bias import Tinker10
 from astropy.cosmology import Planck15
+from scipy.integrate import simpson
+
 cosmo = Planck15 #FlatLambdaCDM(H0=67.74, Om0=0.3089, Tcmb0=2.725)
 sigma_8 = 0.8159
 h = cosmo.H(0).value/100
@@ -54,45 +56,48 @@ def PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     PS_2h = np.power(np.trapz((NCEN + NSAT) * HMF_array * bias * U_FT, M_h_array), 2)
     return np.array([(PS1cs + PS1ss), PS_2h])
 
+def integrate_between_J_zeros(theta, comoving_distance_z,
+                              k_array, hmf_PS, PS_1, PS_2,
+                              STEP_J0 = 5_000):
+    j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
+    res1, res2 = np.zeros(0), np.zeros(0)
+    k0 = j_0_zeros / theta / comoving_distance_z
+    mask_k = k_array < k0[0]
+    k_intr = np.append(k_array[mask_k], k0[0])
+    Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
+    int1 = simpson(np.append(PS_1[mask_k], 0)
+                    * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
+    int2 = simpson(np.append(hmf_PS[mask_k], 0) * np.append(PS_2[mask_k],0)
+                    * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
+    res1 = np.append(res1, int1)
+    res2 = np.append(res2, int2)
+    for i in range(STEP_J0-1):
+        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
+        k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
+        Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
+        int1 = simpson(np.pad(PS_1[mask_k], 1)
+                        * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr)
+        int2 = simpson(np.pad(hmf_PS[mask_k], 1) * np.pad(PS_2[mask_k],1)
+                        * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr)
+        res1 = np.append(res1, int1)
+        res2 = np.append(res2, int2)
+    return np.sum(res1), np.sum(res2)
+
 def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NCEN, NSAT, U_FT,
                          k_array, hmf_PS, bias, STEP_J0 = 5_000):
     PS_1, PS_2 = PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias)
     N1, N2 = np.max(PS_1), np.max(PS_2)
-    #N1, N2 = N1*1e-2, N2*1e-2
-    PS_1n, PS_2n = PS_1 / N1, PS_2 / N2
+    PS_1, PS_2 = PS_1 / N1, PS_2 / N2
     if 1:
-        j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
-        R_T1, R_T2 = np.zeros(0), np.zeros(0)
-        for t in theta:
-            res1, res2 = np.zeros(0), np.zeros(0)
-            k0 = j_0_zeros / t / comoving_distance_z
-            mask_k = k_array < k0[0]
-            k_intr = np.append(k_array[mask_k], k0[0])
-            Bessel = np.array([special.j0(k*t*comoving_distance_z) for k in k_array[mask_k]])
-            int1 = np.trapz(np.append(PS_1[mask_k], 0)
-                            * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr, axis=-1)
-            int2 = np.trapz(np.append(hmf_PS[mask_k], 0) * np.append(PS_2[mask_k],0)
-                            * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr, axis=-1)
-            res1 = np.append(res1, (int1*N1))
-            res2 = np.append(res2, (int2*N2))
-            for i in range(STEP_J0-1):
-                mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
-                k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
-                Bessel = np.array([special.j0(k*t*comoving_distance_z) for k in k_array[mask_k]])
-                int1 = np.trapz(np.pad(PS_1[mask_k], 1)
-                                * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr, axis=-1)
-                int2 = np.trapz(np.pad(hmf_PS[mask_k], 1) * np.pad(PS_2[mask_k],1)
-                                * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr, axis=-1)
-                res1 = np.append(res1, (int1))
-                res2 = np.append(res2, (int2))
-            R_T1 = np.append(R_T1, np.sum(res1))
-            R_T2 = np.append(R_T2, np.sum(res2))
+        R_T = np.asarray([integrate_between_J_zeros(t, comoving_distance_z,
+                              k_array, hmf_PS, PS_1, PS_2, STEP_J0) for t in theta])
+        R_T1, R_T2 = R_T.T[0], R_T.T[1]
         return R_T1 * N1, R_T2 * N2
     Bessel = np.array([\
              np.array([special.j0(k*t*comoving_distance_z) for k in k_array])\
              for t in theta])
-    R_T1 = np.trapz(PS_1n * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
-    R_T2 = np.trapz(hmf_PS * PS_2n * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
+    R_T1 = np.trapz(PS_1 * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
+    R_T2 = np.trapz(hmf_PS * PS_2 * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
     return R_T1 * N1, R_T2 * N2
 
 def init(mem):
@@ -102,23 +107,27 @@ def init(mem):
 
 def omega_z_component_single(args):
     job_id, shape, z, _args_ = args
-    theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS = _args_
+    theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, STEP_J0 = _args_
     shmem = SharedMemory(name=f'{mem_id}', create=False)
     shres = np.ndarray(shape, buffer=shmem.buf, dtype=np.float64)
     if PRECOMP_UFT:
-        M_h_array, HMF_array, nu_array, k_array, hmf_PS, U_FT = init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS)
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS, U_FT =\
+            init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS, LOW_RES)
     else:
-        M_h_array, HMF_array, nu_array, k_array, hmf_PS = init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS)
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS = \
+            init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS, LOW_RES)
         crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
         U_FT = np.array([u_FT(k, M_h_array, z, crit_dens_rescaled) for k in k_array])
     bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
     comoving_distance_z = cosmo.comoving_distance(z).value
     oz1, oz2 = omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array,
-                                    NCEN, NSAT, U_FT, k_array, hmf_PS, bias)
+                                    NCEN, NSAT, U_FT, k_array, hmf_PS, bias, STEP_J0)
     shres[job_id, 0, :], shres[job_id, 1, :] = oz1, oz2
     return
 
-def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, cores=None):
+def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT,
+                               PRECOMP_UFT = False, REWRITE_TBLS = False,
+                               LOW_RES = False, STEP_J0 = 5_000, cores=None):
     if cores is None:
         if len(z_array) <= multiprocessing.cpu_count():
             cores = len(z_array)
@@ -126,7 +135,7 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, PRECOMP_UFT, RE
             print('MORE Z BINS THAN CORES, THE CODE IS NOT SMART ENOUGH TO HANDLE THIS YET')
             raise ValueError
             #cores = multiprocessing.cpu_count()
-    _args_ = theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS
+    _args_ = theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, STEP_J0
     shape = (len(z_array), 2, len(theta_array))
     args =  [(i, shape, z_array[i], _args_) for i in range(int(cores))]
     exit = False
@@ -159,30 +168,33 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT, PRECOMP_UFT, RE
     return z_h_t_array
 
 def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-          PRECOMP_UFT = False, REWRITE_TBLS = False, cores=None):
+          PRECOMP_UFT = False, REWRITE_TBLS = False,
+          LOW_RES = True, STEP_J0 = 8_000, cores=None):
     if PRECOMP_UFT:
-        M_h_array, __, ___, ____, _____, _______ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS)
+        M_h_array, __, ___, ____, _____, _______ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES)
     else:
-        M_h_array, __, ___, ____, _____ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS)
+        M_h_array, __, ___, ____, _____ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES)
     NCEN = N_cen(M_h_array, M_min, sigma_logM)
     NSAT = N_sat(M_h_array, M_sat, alpha, M_min, sigma_logM)
     H_z = [cosmo.H(z).value for z in z_array]
     factor_z = np.power(np.array(N_z_nrm), 2) / (c_light / np.array(H_z))
-    itg = omega_z_component_parallel(z_array, theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, cores)
+    itg = omega_z_component_parallel(z_array, theta, NCEN, NSAT,
+                                     PRECOMP_UFT, REWRITE_TBLS,
+                                     LOW_RES, STEP_J0, cores)
     #TODO: this calls init_lookuptable again, should distirbute it in (or as in) the omega_z_component_parallel
-    N_G = get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm)
+    N_G = get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, LOW_RES)
     I1 = np.array([np.trapz(itg[:,0,i] * factor_z, z_array) for i in range(len(theta))])
     I2 = np.array([np.trapz(itg[:,1,i] * factor_z, z_array) for i in range(len(theta))])
     return I1/ np.power(N_G, 2), I2/ np.power(N_G, 2)
 ###################################################################################################
 #### INITIALIZE HMF ###############################################################################
-def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = True):
+def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = False):
     _HERE_PATH = os.path.dirname(os.path.abspath(''))
     FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/'
-    min_lnk, max_ln_k, step_lnk = -11.1, 13.6, 0.00005
+    min_lnk, max_ln_k, step_lnk = -11.5, 12.6, 0.0001
     if LOW_RES:
         FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
-        min_lnk, max_ln_k, step_lnk = -11.5, 11.5, 0.00025
+        min_lnk, max_ln_k, step_lnk = -11.5, 12.6, 0.0005
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):
@@ -225,10 +237,10 @@ def gal_density_n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, DC = 
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM, DC)
     return np.trapz(HMF_array*NTOT, M_h_array)
 
-def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, DC = 1):
+def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, LOW_RES = False, DC = 1):
     _N_G, _dVdz = np.zeros(0),  np.zeros(0)
     for z in z_array:
-        M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z)
+        M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z, False, False, LOW_RES)
         _N_G  = np.append(_N_G, gal_density_n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, DC))
         _dVdz = np.append(_dVdz, cosmo.comoving_distance(z).value**2 * c_light / cosmo.H(z).value)
     return np.trapz(_N_G * _dVdz * N_z_nrm, z_array)/np.trapz(_dVdz * N_z_nrm, z_array)
