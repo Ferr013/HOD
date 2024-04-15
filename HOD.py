@@ -56,9 +56,37 @@ def PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     PS_2h = np.power(np.trapz((NCEN + NSAT) * HMF_array * bias * U_FT, M_h_array), 2)
     return np.array([(PS1cs + PS1ss), PS_2h])
 
-def integrate_between_J_zeros(theta, comoving_distance_z,
+def interpolate_between_J0_zeros(i, k0, k_array, hmf_PS, PS_1, PS_2, theta, comoving_distance_z,
+                                 N_INTRP = 100, STEP_J0 = 20_000):
+    mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
+    j = 1
+    while not np.any(mask_k) and (i+j)<STEP_J0 and j<10:
+        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1+j])
+        j += 1
+    aPS, aP1, aP2, aJ0, ak = np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
+    if np.any(mask_k):
+        iks, ikb = np.where(mask_k)[0][0]-1, np.where(mask_k)[0][-1]+1
+        if iks>0 and ikb<len(k_array):
+            aug_k_itv = np.linspace(k_array[iks], k_array[ikb], N_INTRP)
+            dk = k_array[ikb] - k_array[iks]
+        else: return aPS, aP1, aP2, aJ0, ak
+        dvPS = (hmf_PS[ikb] - hmf_PS[iks])/dk
+        dvP1 = (PS_1[ikb] - PS_1[iks])/dk
+        dvP2 = (PS_2[ikb] - PS_2[iks])/dk
+        aug_PS = hmf_PS[iks] + dvPS * (aug_k_itv - k_array[iks])
+        aug_P1 = PS_1[iks] + dvP1 * (aug_k_itv - k_array[iks])
+        aug_P2 = PS_2[iks] + dvP2 * (aug_k_itv - k_array[iks])
+        aug_J0 = np.array([special.j0(k*theta*comoving_distance_z) for k in aug_k_itv])
+        mask_augk = np.logical_and(aug_k_itv> k0[i], aug_k_itv< k0[i+1])
+        aP1, aP2 = aug_P1[mask_augk], aug_P2[mask_augk]
+        aPS, aJ0 = aug_PS[mask_augk], aug_J0[mask_augk]
+        ak = np.append(k0[i], np.append(aug_k_itv[mask_augk], k0[i+1])),
+    return aPS, aP1, aP2, aJ0, ak
+
+def integrate_between_J_zeros(theta, z, comoving_distance_z,
                               k_array, hmf_PS, PS_1, PS_2,
-                              STEP_J0 = 5_000):
+                              STEP_J0 = 20_000, INTERPOLATION = True,
+                              VERBOSE = False):
     j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
     res1, res2 = np.zeros(0), np.zeros(0)
     k0 = j_0_zeros / theta / comoving_distance_z
@@ -71,34 +99,66 @@ def integrate_between_J_zeros(theta, comoving_distance_z,
                     * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
     res1 = np.append(res1, int1)
     res2 = np.append(res2, int2)
-    for i in range(STEP_J0-1):
+    i, FLAG_DENSITY = 0, True
+    r1h, r2h = 0, 0
+    e1h, e2h = np.inf, np.inf
+    while (e1h > 0.05 or e2h > 0.05) and (i < STEP_J0-1) and FLAG_DENSITY:
         mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
         k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
-        Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-        int1 = simpson(np.pad(PS_1[mask_k], 1)
-                        * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr)
-        int2 = simpson(np.pad(hmf_PS[mask_k], 1) * np.pad(PS_2[mask_k],1)
-                        * k_intr / (2*np.pi) * np.pad(Bessel, 1), k_intr)
-        res1 = np.append(res1, int1)
-        res2 = np.append(res2, int2)
-    return np.sum(res1), np.sum(res2)
+        aPS, aP1, aP2, aJ0, ak = np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
+        if len(k_array[mask_k]) < 3 and INTERPOLATION:
+            aPS, aP1, aP2, aJ0, ak = interpolate_between_J0_zeros(i, k0, k_array,
+                                                                  hmf_PS, PS_1, PS_2,
+                                                                  theta, comoving_distance_z,
+                                                                  N_INTRP = 100, STEP_J0 = 20_000)
+        else:
+            Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
+            aPS, aP1, aP2, aJ0, ak = hmf_PS[mask_k], PS_1[mask_k], PS_2[mask_k], Bessel, k_intr
+        if len(aPS) == 0:
+            # print('len(aPS) == 0 :', len(aPS) == 0)
+            # print('len(k_array[mask_k]):', len(k_array[mask_k]))
+            # print('(e1h > 0.05) : ', e1h > 0.05)
+            # print('(e2h > 0.05) : ', e2h > 0.05)
+            # print('(i < STEP_J0-1) :', (i < STEP_J0-1))
+            FLAG_DENSITY = False
+        else:
+            int1 = simpson(np.pad(aP1, 1)
+                            * ak / (2*np.pi) * np.pad(aJ0, 1), ak)
+            int2 = simpson(np.pad(aPS, 1) * np.pad(aP2,1)
+                            * ak / (2*np.pi) * np.pad(aJ0, 1), ak)
+            res1, res2 = np.append(res1, int1), np.append(res2, int2)
+            e1h = np.abs((np.sum(res1) - r1h)/np.sum(res1))
+            e2h = np.abs((np.sum(res2) - r2h)/np.sum(res2))
+            r1h, r2h = np.sum(res1), np.sum(res2)
+            i += 1
+    if VERBOSE:
+        print(f'### z: {z} ###')
+        print(f'##### theta: {theta*206265} arcsec #####')
+        print(f'Integrating over {i} zeros of Bessel J0')
+        k_min = np.log10(np.min(k_array))
+        k_max_J0 = np.log10(special.jn_zeros(0, STEP_J0)[i]/ theta / comoving_distance_z)
+        print(f'Over a range of {k_min:.1e} < k < {k_max_J0:.1e}')
+        print(f'     Integral 1h: {r1h:.1e} \pm {e1h*100:.1e}%')
+        print(f'     Integral 2h: {r2h:.1e} \pm {e2h*100:.1e}%')
+    return r1h, r2h, e1h, e2h
 
 def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NCEN, NSAT, U_FT,
-                         k_array, hmf_PS, bias, STEP_J0 = 5_000):
+                         k_array, hmf_PS, bias, STEP_J0 = 20_000, INTERPOLATION = True, VERBOSE = False):
     PS_1, PS_2 = PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias)
     N1, N2 = np.max(PS_1), np.max(PS_2)
     PS_1, PS_2 = PS_1 / N1, PS_2 / N2
     if 1:
-        R_T = np.asarray([integrate_between_J_zeros(t, comoving_distance_z,
-                              k_array, hmf_PS, PS_1, PS_2, STEP_J0) for t in theta])
+        R_T = np.asarray([integrate_between_J_zeros(t, z, comoving_distance_z,
+                              k_array, hmf_PS, PS_1, PS_2, STEP_J0, INTERPOLATION, VERBOSE) for t in theta])
         R_T1, R_T2 = R_T.T[0], R_T.T[1]
-        return R_T1 * N1, R_T2 * N2
+        E_T1, E_T2 = R_T.T[2], R_T.T[3]
+        return R_T1 * N1, R_T2 * N2, E_T1, E_T2
     Bessel = np.array([\
              np.array([special.j0(k*t*comoving_distance_z) for k in k_array])\
              for t in theta])
     R_T1 = np.trapz(PS_1 * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
     R_T2 = np.trapz(hmf_PS * PS_2 * k_array / (2*np.pi) * Bessel, k_array, axis = -1)
-    return R_T1 * N1, R_T2 * N2
+    return R_T1 * N1, R_T2 * N2, 0, 0
 
 def init(mem):
     global mem_id
@@ -107,7 +167,7 @@ def init(mem):
 
 def omega_z_component_single(args):
     job_id, shape, z, _args_ = args
-    theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, STEP_J0 = _args_
+    theta, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, STEP_J0, INTERPOLATION, VERBOSE = _args_
     shmem = SharedMemory(name=f'{mem_id}', create=False)
     shres = np.ndarray(shape, buffer=shmem.buf, dtype=np.float64)
     if PRECOMP_UFT:
@@ -120,14 +180,26 @@ def omega_z_component_single(args):
         U_FT = np.array([u_FT(k, M_h_array, z, crit_dens_rescaled) for k in k_array])
     bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
     comoving_distance_z = cosmo.comoving_distance(z).value
-    oz1, oz2 = omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array,
-                                    NCEN, NSAT, U_FT, k_array, hmf_PS, bias, STEP_J0)
+    oz1, oz2, e1, e2 = omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array,
+                                            NCEN, NSAT, U_FT, k_array, hmf_PS, bias,
+                                            STEP_J0, INTERPOLATION, VERBOSE)
     shres[job_id, 0, :], shres[job_id, 1, :] = oz1, oz2
+    if 0:
+        print(f'Integrating over {STEP_J0} zeros of Bessel J0')
+        print(f'### z: {z} ###')
+        for it, _theta in enumerate(theta):
+            print(f'##### theta: {_theta*206265} arcsec ###')
+            print(f'     Integral 1h: {oz1[it]:.1e} \pm {e1[it]*100:.1e}%')
+            print(f'     Integral 2h: {oz2[it]:.1e} \pm {e2[it]*100:.1e}%')
+            k_min = np.log10(np.min(k_array))
+            k_max_J0 = np.log10(special.jn_zeros(0, STEP_J0)[-1]/ _theta / comoving_distance_z)
+            print(f'Over a range of {k_min:.1e} < k < {k_max_J0:.1e}')
     return
 
 def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT,
                                PRECOMP_UFT = False, REWRITE_TBLS = False,
-                               LOW_RES = False, STEP_J0 = 5_000, cores=None):
+                               LOW_RES = False, STEP_J0 = 20_000,
+                               cores=None, INTERPOLATION = True, VERBOSE = False):
     if cores is None:
         if len(z_array) <= multiprocessing.cpu_count():
             cores = len(z_array)
@@ -135,7 +207,8 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT,
             print('MORE Z BINS THAN CORES, THE CODE IS NOT SMART ENOUGH TO HANDLE THIS YET')
             raise ValueError
             #cores = multiprocessing.cpu_count()
-    _args_ = theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, STEP_J0
+    _args_ = theta_array, NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS,\
+             LOW_RES, STEP_J0, INTERPOLATION, VERBOSE
     shape = (len(z_array), 2, len(theta_array))
     args =  [(i, shape, z_array[i], _args_) for i in range(int(cores))]
     exit = False
@@ -169,7 +242,8 @@ def omega_z_component_parallel(z_array, theta_array, NCEN, NSAT,
 
 def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
           PRECOMP_UFT = False, REWRITE_TBLS = False,
-          LOW_RES = True, STEP_J0 = 8_000, cores=None):
+          LOW_RES = False, STEP_J0 = 20_000, cores=None,
+          INTERPOLATION = True, VERBOSE = False):
     if PRECOMP_UFT:
         M_h_array, __, ___, ____, _____, _______ = init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES)
     else:
@@ -180,7 +254,7 @@ def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
     factor_z = np.power(np.array(N_z_nrm), 2) / (c_light / np.array(H_z))
     itg = omega_z_component_parallel(z_array, theta, NCEN, NSAT,
                                      PRECOMP_UFT, REWRITE_TBLS,
-                                     LOW_RES, STEP_J0, cores)
+                                     LOW_RES, STEP_J0, cores, INTERPOLATION, VERBOSE)
     #TODO: this calls init_lookuptable again, should distirbute it in (or as in) the omega_z_component_parallel
     N_G = get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, LOW_RES)
     I1 = np.array([np.trapz(itg[:,0,i] * factor_z, z_array) for i in range(len(theta))])
@@ -191,10 +265,10 @@ def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
 def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = False):
     _HERE_PATH = os.path.dirname(os.path.abspath(''))
     FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/'
-    min_lnk, max_ln_k, step_lnk = -11.5, 12.6, 0.0001
+    min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.0001
     if LOW_RES:
         FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
-        min_lnk, max_ln_k, step_lnk = -11.5, 12.6, 0.0005
+        min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.002
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):
@@ -237,7 +311,7 @@ def gal_density_n_g(M_min, sigma_logM, M_sat, alpha, M_h_array, HMF_array, DC = 
     NTOT = N_tot(M_h_array, M_sat, alpha, M_min, sigma_logM, DC)
     return np.trapz(HMF_array*NTOT, M_h_array)
 
-def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, LOW_RES = False, DC = 1):
+def get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm, LOW_RES = True, DC = 1):
     _N_G, _dVdz = np.zeros(0),  np.zeros(0)
     for z in z_array:
         M_h_array, HMF_array, nu_array, hmf_k, hmf_PS = init_lookup_table(z, False, False, LOW_RES)
