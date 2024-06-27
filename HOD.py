@@ -12,11 +12,56 @@ from hmf import MassFunction
 from halomod.bias import Tinker10
 from astropy.cosmology import Planck15
 from scipy.integrate import simpson
+import gzip
 
 cosmo = Planck15 #FlatLambdaCDM(H0=67.74, Om0=0.3089, Tcmb0=2.725)
 sigma_8 = 0.8159
 h = cosmo.H(0).value/100
 c_light  = 299792.458 #speed of light km/s
+
+###################################################################################################
+### Luminosity -> Halo Mass from Tacchella, Trenti et al. 2015 ####################################
+def load_Tacchella_table():
+    file_path = r"Trenti_15.dat.gz"
+    z, p, mag_d, mag, Mstar, Mdm, logZ, N = [], [], [], [], [], [], [], []
+    with gzip.open(file_path, 'rt') as file:
+        for line in file:
+            columns = line.strip().split(' ')
+            z.append(float(columns[0]))
+            p.append(float(columns[1]))
+            mag_d.append(float(columns[2]))
+            mag.append(float(columns[3]))
+            Mstar.append(float(columns[4]))
+            Mdm.append(float(columns[5]))
+            # logZ.append(list(columns[6]))
+            N.append(float(columns[7]))
+    z, p, mag_d = np.array(z), np.array(p), np.array(mag_d)
+    mag, Mstar, Mdm = np.array(mag), np.array(Mstar), np.array(Mdm)
+    N = np.array(N) # logZ = np.array(logZ)
+    return z, p, mag_d, mag, Mstar, Mdm, logZ, N
+
+def get_M_DM_range(z_analysis=5, m_max=-15, m_min=-22, delta_z=0.5, VERBOSE=False):
+    z, p, mag_d, mag, Mstar, Mdm, logZ, N = load_Tacchella_table()
+    zmax, zmin = z_analysis + delta_z, z_analysis - delta_z
+    if m_max < 0: #check if abs magnitudes
+        _m_max,_m_min = np.max((m_max, m_min)), np.min((m_max, m_min))
+        mag_max, mag_min = _m_max, _m_min
+    else:
+        _m_max,_m_min = np.max((m_max, m_min)), np.min((m_max, m_min))
+        _distmd = 2.5 * np.log10(1+z_analysis) - cosmo.distmod(z_analysis).value
+        mag_max, mag_min = _m_max + _distmd, _m_min + _distmd
+    idx = np.where((z>=zmin) & (z<zmax) & (p==max(p)) & (mag<mag_max) & (mag>mag_min))[0]
+    if len(idx) < 2:
+        if VERBOSE: print('The redshift and/or mass interval requested are not in the lookup table')
+        if z_analysis > 1:
+            if VERBOSE: print('Trying z-0.5 --> z : ', z_analysis - 0.5)
+            return get_M_DM_range(z_analysis - 1, m_max, m_min, delta_z)
+        return -99, -99
+    magg, mmdm = mag[idx], Mdm[idx]
+    idx_sort   = np.argsort(magg)
+    magg, mmdm = magg[idx_sort], mmdm[idx_sort]
+    return np.log10(min(mmdm)), np.log10(max(mmdm))
+
 ###################################################################################################
 ### HALO OCCUPATION DISTRIBUTION ##################################################################
 def N_cen(M_h, M_min, sigma_logM, DC = 1):
@@ -136,7 +181,7 @@ def integrate_between_J_zeros(theta, z, comoving_distance_z,
             e2h = np.abs((np.sum(res2) - r2h)/np.sum(res2))
             r1h, r2h = np.sum(res1), np.sum(res2)
             i += 1
-    if VERBOSE:
+    if 0: #VERBOSE:
         print(f'### z: {z} ###')
         print(f'##### theta: {theta*206265} arcsec #####')
         print(f'Integrating over {i} zeros of Bessel J0')
@@ -184,6 +229,8 @@ def omega_z_component_single(args):
             init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
         crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
         U_FT = np.array([u_FT(k, M_h_array, z, crit_dens_rescaled) for k in k_array])
+
+    if VERBOSE: print('len (M_h_array) @ z = ',z,' : ', len(M_h_array))
     bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
     comoving_distance_z = cosmo.comoving_distance(z).value
     oz1, oz2, e1, e2 = omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array,
@@ -247,16 +294,22 @@ def omega_z_component_parallel(z_array, theta_array, M_DM_min, M_DM_max, NCEN, N
     return z_h_t_array
 
 def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
-          M_DM_min = 0, M_DM_max = np.inf,
+          mag_min = 0, mag_max = np.inf,
           PRECOMP_UFT = False, REWRITE_TBLS = False,
           LOW_RES = False, STEP_J0 = 50_000, cores=None,
           INTERPOLATION = True, VERBOSE = False):
+    if mag_min == 0 or mag_max == np.inf:
+        M_DM_min, M_DM_max = 0, np.inf
+    else:
+        M_DM_min, M_DM_max = get_M_DM_range(np.mean(z_array), mag_max, mag_min, delta_z=0.5)
+    if VERBOSE: print('M_DM_min, M_DM_max = ', M_DM_min, M_DM_max)
     if PRECOMP_UFT:
         M_h_array, __, ___, ____, _____, _______ =\
              init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
     else:
         M_h_array, __, ___, ____, _____ =\
              init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
+    if VERBOSE: print('len (M_h_array) @ z = 0 : ', len(M_h_array))
     NCEN = N_cen(M_h_array, M_min, sigma_logM)
     NSAT = N_sat(M_h_array, M_sat, alpha, M_min, sigma_logM)
     H_z = [cosmo.H(z).value for z in z_array]
@@ -308,7 +361,7 @@ def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = Fa
                 crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
                 hmf_U_FT = np.array([u_FT(k, hmf_mass, z, crit_dens_rescaled) for k in hmf_k])
                 np.savetxt(FPATH, hmf_U_FT,  delimiter=',')
-        m_mask = np.logical_and(hmf_mass > M_DM_min, hmf_mass < M_DM_max)
+        m_mask = np.logical_and(np.log10(hmf_mass) > M_DM_min, np.log10(hmf_mass) < M_DM_max)
         if PRECOMP_UFT:
             return hmf_mass[m_mask], hmf_dndm[m_mask], hmf_nu[m_mask], hmf_k, hmf_PS, hmf_U_FT
         else:
