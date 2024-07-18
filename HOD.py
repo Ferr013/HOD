@@ -102,7 +102,7 @@ def PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     return np.array([(PS1cs + PS1ss), PS_2h])
 
 def interpolate_between_J0_zeros(i, k0, k_array, log_hmf_PS, log_PS_1, log_PS_2, theta, comoving_distance_z,
-                                 N_INTRP = 50, STEP_J0 = 50_000):
+                                 N_INTRP = 8, STEP_J0 = 50_000):
     mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
     j = 1
     while not np.any(mask_k) and (i+j)<STEP_J0 and j<1000:
@@ -112,29 +112,62 @@ def interpolate_between_J0_zeros(i, k0, k_array, log_hmf_PS, log_PS_1, log_PS_2,
         iks, ikb = np.where(mask_k)[0][0]-1, np.where(mask_k)[0][-1]+1
         if iks>0 and ikb<len(k_array):
             log_k_array = np.log10(k_array)
-            aug_log_k_itv = np.logspace(log_k_array[iks], log_k_array[ikb], N_INTRP)
+            log_k_upper = np.log10(k0[i+1])
+            aug_log_k_itv = np.log10(np.logspace(log_k_array[iks], log_k_upper, N_INTRP))
             log_dk = log_k_array[ikb] - log_k_array[iks]
             dv_logPS = (log_hmf_PS[ikb] - log_hmf_PS[iks])/log_dk
             dv_logP1 = (log_PS_1[ikb] - log_PS_1[iks])/log_dk
             dv_logP2 = (log_PS_2[ikb] - log_PS_2[iks])/log_dk
+            # print(log_dk, dv_logPS)
             aug_PS = np.power(10, log_hmf_PS[iks] + dv_logPS * (aug_log_k_itv - log_k_array[iks]))
             aug_P1 = np.power(10, log_PS_1[iks] + dv_logP1 * (aug_log_k_itv - log_k_array[iks]))
             aug_P2 = np.power(10, log_PS_2[iks] + dv_logP2 * (aug_log_k_itv - log_k_array[iks]))
             aug_k_itv = np.power(10, aug_log_k_itv)
+            # print((aug_log_k_itv - log_k_array[iks]))
             aug_J0 = np.array([special.j0(k*theta*comoving_distance_z) for k in aug_k_itv])
-            mask_augk = np.logical_and(aug_k_itv> k0[i], aug_k_itv< k0[i+1])
-            aP1, aP2 = aug_P1[mask_augk], aug_P2[mask_augk]
-            aPS, aJ0 = aug_PS[mask_augk], aug_J0[mask_augk]
-            ak = np.append(k0[i], np.append(aug_k_itv[mask_augk], k0[i+1])),
-            return aPS, aP1, aP2, aJ0, ak
+            # mask_augk = np.logical_and(aug_k_itv> k0[i], aug_k_itv< k0[i+1])
+            # aP1, aP2 = aug_P1[mask_augk], aug_P2[mask_augk]
+            # aPS, aJ0 = aug_PS[mask_augk], aug_J0[mask_augk]
+            # ak = np.append(k0[i], np.append(aug_k_itv[mask_augk], k0[i+1]))
+            # print(log_k_array[iks], log_k_array[ikb])
+            # print('-> len(mask)', np.sum(mask_k), ' ', j,' !!! ', aug_P1, aug_P2, aug_PS, aug_J0, aug_k_itv)
+            return aug_P1[1:-1], aug_P2[1:-1], aug_PS[1:-1], aug_J0[1:-1], aug_k_itv
     else:
         return np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
 
+def integral_P1gsJzero_from_largek(k_min, z, comoving_distance_z, theta_rad,
+                                   VERBOSE = False):
+    # r = comoving_distance_z
+    # theta = theta_arcsec/206265
+    a, b, c = -0.04346161,  0.13011286,  1.35990887 # from P_1cs fit
+    A = np.power(10, a * z*z + b * z + c)
+    y = k_min/(comoving_distance_z*theta_rad)
+    pre = comoving_distance_z*theta_rad/(2*np.pi)/2
+    fir = (-np.pi*y**2*special.struve(1, y)+2*y*y+2)*special.jv(0, y)/y
+    sec = (np.pi*y*special.struve(0, y)-2)*special.jv(1, y)-2
+    if VERBOSE:
+        print(f' - y: {y:.1e}')
+        print(f' --- pre: {pre:.1e}')
+        print(f' --- fir: {fir:.1e}')
+        print(f' --- sec: {sec:.1e}')
+    return A * pre * (fir + sec)
+
 def integrate_between_J_zeros(theta, z, comoving_distance_z,
-                              k_array, hmf_PS, PS_1, PS_2,
+                              _k_array, hmf_PS, PS_1, PS_2,
                               STEP_J0 = 50_000, PRECISION = 0.01,
-                              INTERPOLATION = True,
+                              INTERPOLATION = False,
                               VERBOSE = False):
+    k_array = 0
+    APPROX_LARGE_K = 0
+    if APPROX_LARGE_K:
+        K_MIN = 1e4
+        mk = _k_array<=K_MIN
+        low_k_array = _k_array[mk]
+        PS_1, PS_2, hmf_PS = PS_1[mk], PS_2[mk], hmf_PS[mk]
+        k_array = low_k_array
+    else:
+        k_array = _k_array
+
     j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
     res1, res2 = np.zeros(0), np.zeros(0)
     k0 = j_0_zeros / theta / comoving_distance_z
@@ -150,6 +183,7 @@ def integrate_between_J_zeros(theta, z, comoving_distance_z,
     i, FLAG_DENSITY = 0, True
     r1h, r2h = 0, 0
     e1h, e2h = np.inf, np.inf
+
     while (e1h > PRECISION or e2h > PRECISION) and (i < STEP_J0-1) and FLAG_DENSITY:
         mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
         k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
@@ -161,6 +195,7 @@ def integrate_between_J_zeros(theta, z, comoving_distance_z,
                                                                   np.log10(PS_2),
                                                                   theta, comoving_distance_z,
                                                                   N_INTRP = 100, STEP_J0 = 20_000)
+            # return 0, 0, 0, 0
         else:
             Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
             aPS, aP1, aP2, aJ0, ak = hmf_PS[mask_k], PS_1[mask_k], PS_2[mask_k], Bessel, k_intr
@@ -190,6 +225,8 @@ def integrate_between_J_zeros(theta, z, comoving_distance_z,
         print(f'Over a range of {k_min:.1e} < k < {k_max_J0:.1e}')
         print(f'     Integral 1h: {r1h:.1e} \pm {e1h*100:.1e}%')
         print(f'     Integral 2h: {r2h:.1e} \pm {e2h*100:.1e}%')
+    if APPROX_LARGE_K:
+        r1h = r1h + integral_P1gsJzero_from_largek(K_MIN, z, comoving_distance_z, theta)
     return r1h, r2h, e1h, e2h
 
 def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NCEN, NSAT, U_FT,
@@ -199,8 +236,10 @@ def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NC
     PS_1, PS_2 = PS_1 / N1, PS_2 / N2
     if 1:
         PRECISION = 0.01
-        R_T = np.asarray([integrate_between_J_zeros(t, z, comoving_distance_z,
-                              k_array, hmf_PS, PS_1, PS_2, STEP_J0, PRECISION, INTERPOLATION, VERBOSE) for t in theta])
+        R_T = np.asarray([integrate_between_J_zeros(t, z, comoving_distance_z, k_array,
+                                                    hmf_PS, PS_1, PS_2, STEP_J0,
+                                                    PRECISION, INTERPOLATION, VERBOSE)
+                                                    for t in theta])
         R_T1, R_T2 = R_T.T[0], R_T.T[1]
         E_T1, E_T2 = R_T.T[2], R_T.T[3]
         return R_T1 * N1, R_T2 * N2, E_T1, E_T2
@@ -297,7 +336,7 @@ def omega(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
           mag_min = 0, mag_max = np.inf,
           PRECOMP_UFT = False, REWRITE_TBLS = False,
           LOW_RES = False, STEP_J0 = 50_000, cores=None,
-          INTERPOLATION = True, VERBOSE = False):
+          INTERPOLATION = False, VERBOSE = False):
     if mag_min == 0 or mag_max == np.inf:
         M_DM_min, M_DM_max = 0, np.inf
     else:
