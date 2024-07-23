@@ -1,3 +1,7 @@
+################################################################################################################
+# Giovanni Ferrami July 2024
+################################################################################################################
+
 import warnings
 warnings.simplefilter("ignore")
 
@@ -392,6 +396,27 @@ def omega_z_component_single_2halo(args):
             print(f'Over a range of {k_min:.1e} < k < {k_max_J0:.1e}')
     return
 
+def omega_z_component_singleCore_2halo(z, args):
+    theta, M_DM_min, M_DM_max, \
+    NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, \
+    LOW_RES, STEP_J0, INTERPOLATION, VERBOSE = args
+    if PRECOMP_UFT:
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS, U_FT =\
+            init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
+    else:
+        M_h_array, HMF_array, nu_array, k_array, hmf_PS = \
+            init_lookup_table(z, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
+        crit_dens_rescaled = (4/3*np.pi*cosmo.critical_density(z).value*200*2e40)
+        U_FT = np.array([u_FT(k, M_h_array, z, crit_dens_rescaled) for k in k_array])
+
+    if VERBOSE: print('len (M_h_array) @ z = ',z,' : ', len(M_h_array))
+    bias = Tinker10(nu=nu_array, sigma_8 = sigma_8, cosmo = cosmo).bias()
+    comoving_distance_z = cosmo.comoving_distance(z).value
+    oz2, e2 = omega_inner_integral_2halo(theta, z, comoving_distance_z, M_h_array, HMF_array,
+                                        NCEN, NSAT, U_FT, k_array, hmf_PS, bias,
+                                        STEP_J0, INTERPOLATION, VERBOSE)
+    return oz2
+
 def omega_z_component_parallel(z_array, theta_array, M_DM_min, M_DM_max, NCEN, NSAT,
                                PRECOMP_UFT = False, REWRITE_TBLS = False,
                                LOW_RES = False, STEP_J0 = 50_000,
@@ -541,6 +566,39 @@ def omega_2halo(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
     I2 = np.array([np.trapz(itg[:,i] * factor_z, z_array) for i in range(len(theta))])
     return I2/ np.power(N_G, 2)
 
+def omega_2halo_singleCore(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
+                            mag_min = 0, mag_max = np.inf,
+                            PRECOMP_UFT = False, REWRITE_TBLS = False,
+                            LOW_RES = False, STEP_J0 = 50_000, cores=None,
+                            INTERPOLATION = False, VERBOSE = False):
+    if mag_min == 0 or mag_max == np.inf:
+        M_DM_min, M_DM_max = 0, np.inf
+    else:
+        M_DM_min, M_DM_max = get_M_DM_range(np.mean(z_array), mag_max, mag_min, delta_z=0.5)
+    if VERBOSE: print('M_DM_min, M_DM_max = ', M_DM_min, M_DM_max)
+    if PRECOMP_UFT:
+        M_h_array, __, ___, ____, _____, _______ =\
+             init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
+    else:
+        M_h_array, __, ___, ____, _____ =\
+             init_lookup_table(0, PRECOMP_UFT, REWRITE_TBLS, LOW_RES, M_DM_min, M_DM_max)
+    if VERBOSE: print('len (M_h_array) @ z = 0 : ', len(M_h_array))
+    NCEN = N_cen(M_h_array, M_min, sigma_logM)
+    NSAT = N_sat(M_h_array, M_sat, alpha, M_min, sigma_logM)
+    H_z = [cosmo.H(z).value for z in z_array]
+    factor_z = np.power(np.array(N_z_nrm), 2) / (c_light / np.array(H_z))
+    ### Single Core z integral ######################################################
+    args = theta, M_DM_min, M_DM_max, \
+            NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, \
+            LOW_RES, STEP_J0, INTERPOLATION, VERBOSE
+    itg = np.array([omega_z_component_singleCore_2halo(z, args) for z in z_array])
+    #################################################################################
+    #TODO: this calls init_lookuptable again, should distirbute it in (or as in) the omega_z_component_parallel
+    N_G = get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm,
+                         LOW_RES = LOW_RES, int_M_min=np.power(10, M_DM_min), int_M_max=np.power(10, M_DM_max))
+    I2 = np.array([np.trapz(itg[:,i] * factor_z, z_array) for i in range(len(theta))])
+    return I2/ np.power(N_G, 2)
+
 ###################################################################################################
 #### INITIALIZE HMF ###############################################################################
 def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = False,
@@ -550,7 +608,7 @@ def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = Fa
     min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.0001
     if LOW_RES:
         FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
-        min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.002
+        min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.025
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):
