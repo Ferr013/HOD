@@ -142,9 +142,9 @@ mag_min, mag_max = -22.3, -15.5
 MIN_THETA = 5 #arcsec
 
 argv = sys.argv
-Z_OBSERVATION = argv[1]
-mag_min, mag_max = argv[2], argv[3]
-MIN_THETA = argv[4] #arcsec
+Z_OBSERVATION = float(argv[1])
+mag_min, mag_max = float(argv[2]), float(argv[3])
+MIN_THETA = float(argv[4]) #arcsec
 ################################################################################################################
 filename = 'MCMC_chains/chains_2halo_z'+str(Z_OBSERVATION)+'.h5'
 ################################################################################################################
