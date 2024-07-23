@@ -78,7 +78,7 @@ def get_Mh_interval(mag_min = 0, mag_max = np.inf):
     return M_DM_min, M_DM_max
 ################################################################################################################
 
-def get_Nico_obs(z):
+def get_Nico_obs(z, MIN_THETA = 0):
     fnames = ['ACF_new_parameters_z5.5.txt',
             'ACF_new_parameters_z6.5.txt',
             'ACF_new_parameters_z7.4.txt',
@@ -96,13 +96,14 @@ def get_Nico_obs(z):
     Nz = data['Nz'].to_numpy()
     z_array, Nz = z_array[z_array>0], Nz[z_array>0]
     N_norm = Nz / (np.sum(Nz) * np.diff(z_array)[0])
-    return bin_centre, w_obs, w_err, z_array, N_norm
+    mask = bin_centre > MIN_THETA
+    return bin_centre[mask], w_obs[mask], w_err[mask], z_array, N_norm
 
 def log_likelihood(theta):
     logM_min, logM_sat = theta
     M_min, M_sat = np.power(10, logM_min), np.power(10, logM_sat)
     sigma_logM, alpha = 0.2, 1.0
-    o2_model = omega_2halo_singleCore(bin_centre,
+    o2_model = omega_2halo_singleCore(bin_centre/206265,
                                         M_min, sigma_logM, M_sat, alpha,
                                         N_norm, z_array,
                                         _tables_and_cosmo_,
@@ -138,13 +139,19 @@ R_SEED = 753
 ### !!! Change parameters below for each run !!! ###############################################################
 Z_OBSERVATION = 5.5
 mag_min, mag_max = -22.3, -15.5
+MIN_THETA = 5 #arcsec
+
+argv = sys.argv
+Z_OBSERVATION = argv[1]
+mag_min, mag_max = argv[2], argv[3]
+MIN_THETA = argv[4] #arcsec
 ################################################################################################################
 filename = 'MCMC_chains/chains_2halo_z'+str(Z_OBSERVATION)+'.h5'
 ################################################################################################################
 
 if PROGRESS: print('Computing MCMC over 2 halo term')
 
-bin_centre, w_obs, w_err, z_array, N_norm = get_Nico_obs(Z_OBSERVATION)
+bin_centre, w_obs, w_err, z_array, N_norm = get_Nico_obs(Z_OBSERVATION, MIN_THETA=MIN_THETA)
 if PROGRESS: print('Got Obs', w_obs.shape)
 
 M_DM_min, M_DM_max = get_Mh_interval(mag_min, mag_max)
