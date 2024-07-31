@@ -114,7 +114,7 @@ def PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
 def PS_1h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     PS1cs = np.trapz(HMF_array * NCEN * NSAT * U_FT, M_h_array) * 2
     PS1ss = np.trapz(HMF_array * NSAT * NSAT * U_FT * U_FT, M_h_array) * 1
-    return PS1cs + PS1ss
+    return PS1ss + PS1cs
 
 def PS_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     PS_2h = np.power(np.trapz((NCEN + NSAT) * HMF_array * bias * U_FT, M_h_array), 2)
@@ -719,7 +719,7 @@ def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = Fa
     min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.001
     if LOW_RES:
         FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
-        min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.025
+        min_lnk, max_ln_k, step_lnk = -11.5, 16.6, 0.025
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):

@@ -121,197 +121,6 @@ def PS_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias):
     PS_2h = np.power(np.trapz((NCEN + NSAT) * HMF_array * bias * U_FT, M_h_array), 2)
     return PS_2h
 
-def interpolate_between_J0_zeros(i, k0, k_array, log_hmf_PS, log_PS_1, log_PS_2, theta, comoving_distance_z,
-                                 N_INTRP = 8, STEP_J0 = 50_000):
-    mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
-    j = 1
-    while not np.any(mask_k) and (i+j)<STEP_J0 and j<1000:
-        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1+j])
-        j += 1
-    if np.any(mask_k):
-        iks, ikb = np.where(mask_k)[0][0]-1, np.where(mask_k)[0][-1]+1
-        if iks>0 and ikb<len(k_array):
-            log_k_array = np.log10(k_array)
-            log_k_upper = np.log10(k0[i+1])
-            aug_log_k_itv = np.log10(np.logspace(log_k_array[iks], log_k_upper, N_INTRP))
-            log_dk = log_k_array[ikb] - log_k_array[iks]
-            dv_logPS = (log_hmf_PS[ikb] - log_hmf_PS[iks])/log_dk
-            dv_logP1 = (log_PS_1[ikb] - log_PS_1[iks])/log_dk
-            dv_logP2 = (log_PS_2[ikb] - log_PS_2[iks])/log_dk
-            # print(log_dk, dv_logPS)
-            aug_PS = np.power(10, log_hmf_PS[iks] + dv_logPS * (aug_log_k_itv - log_k_array[iks]))
-            aug_P1 = np.power(10, log_PS_1[iks] + dv_logP1 * (aug_log_k_itv - log_k_array[iks]))
-            aug_P2 = np.power(10, log_PS_2[iks] + dv_logP2 * (aug_log_k_itv - log_k_array[iks]))
-            aug_k_itv = np.power(10, aug_log_k_itv)
-            # print((aug_log_k_itv - log_k_array[iks]))
-            aug_J0 = np.array([special.j0(k*theta*comoving_distance_z) for k in aug_k_itv])
-            # mask_augk = np.logical_and(aug_k_itv> k0[i], aug_k_itv< k0[i+1])
-            # aP1, aP2 = aug_P1[mask_augk], aug_P2[mask_augk]
-            # aPS, aJ0 = aug_PS[mask_augk], aug_J0[mask_augk]
-            # ak = np.append(k0[i], np.append(aug_k_itv[mask_augk], k0[i+1]))
-            # print(log_k_array[iks], log_k_array[ikb])
-            # print('-> len(mask)', np.sum(mask_k), ' ', j,' !!! ', aug_P1, aug_P2, aug_PS, aug_J0, aug_k_itv)
-            return aug_P1[1:-1], aug_P2[1:-1], aug_PS[1:-1], aug_J0[1:-1], aug_k_itv
-    else:
-        return np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
-
-def integral_P1gsJzero_from_largek(k_min, z, comoving_distance_z, theta_rad,
-                                   VERBOSE = False):
-    # r = comoving_distance_z
-    # theta = theta_arcsec/206265
-    a, b, c = -0.04346161,  0.13011286,  1.35990887 # from P_1cs fit
-    A = np.power(10, a * z*z + b * z + c)
-    y = k_min/(comoving_distance_z*theta_rad)
-    pre = comoving_distance_z*theta_rad/(2*np.pi)/2
-    fir = (-np.pi*y**2*special.struve(1, y)+2*y*y+2)*special.jv(0, y)/y
-    sec = (np.pi*y*special.struve(0, y)-2)*special.jv(1, y)-2
-    if VERBOSE:
-        print(f' - y: {y:.1e}')
-        print(f' --- pre: {pre:.1e}')
-        print(f' --- fir: {fir:.1e}')
-        print(f' --- sec: {sec:.1e}')
-    return A * pre * (fir + sec)
-
-def integrate_between_J_zeros(theta, z, comoving_distance_z,
-                              _k_array, hmf_PS, PS_1, PS_2,
-                              STEP_J0 = 50_000, PRECISION = 0.01,
-                              INTERPOLATION = False,
-                              VERBOSE = False):
-    k_array = 0
-    APPROX_LARGE_K = 0
-    if APPROX_LARGE_K:
-        K_MIN = 1e4
-        mk = _k_array<=K_MIN
-        low_k_array = _k_array[mk]
-        PS_1, PS_2, hmf_PS = PS_1[mk], PS_2[mk], hmf_PS[mk]
-        k_array = low_k_array
-    else:
-        k_array = _k_array
-
-    j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
-    res1, res2 = np.zeros(0), np.zeros(0)
-    k0 = j_0_zeros / theta / comoving_distance_z
-    mask_k = k_array < k0[0]
-    k_intr = np.append(k_array[mask_k], k0[0])
-    Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-    int1 = simpson(np.append(PS_1[mask_k], 0)
-                    * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
-    int2 = simpson(np.append(hmf_PS[mask_k], 0) * np.append(PS_2[mask_k],0)
-                    * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
-    res1 = np.append(res1, int1)
-    res2 = np.append(res2, int2)
-    i, FLAG_DENSITY = 0, True
-    r1h, r2h = 0, 0
-    e1h, e2h = np.inf, np.inf
-
-    while (e1h > PRECISION or e2h > PRECISION) and (i < STEP_J0-1) and FLAG_DENSITY:
-        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
-        k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
-        aPS, aP1, aP2, aJ0, ak = np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
-        if len(k_array[mask_k]) < 3 and INTERPOLATION:
-            aPS, aP1, aP2, aJ0, ak = interpolate_between_J0_zeros(i, k0, k_array,
-                                                                  np.log10(hmf_PS),
-                                                                  np.log10(PS_1),
-                                                                  np.log10(PS_2),
-                                                                  theta, comoving_distance_z,
-                                                                  N_INTRP = 100, STEP_J0 = 20_000)
-            # return 0, 0, 0, 0
-        else:
-            Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-            aPS, aP1, aP2, aJ0, ak = hmf_PS[mask_k], PS_1[mask_k], PS_2[mask_k], Bessel, k_intr
-        if len(aPS) == 0:
-            # print('len(aPS) == 0 :', len(aPS) == 0)
-            # print('len(k_array[mask_k]):', len(k_array[mask_k]))
-            # print('(e1h > 0.05) : ', e1h > 0.05)
-            # print('(e2h > 0.05) : ', e2h > 0.05)
-            # print('(i < STEP_J0-1) :', (i < STEP_J0-1))
-            FLAG_DENSITY = False
-        else:
-            int1 = simpson(np.pad(aP1, 1)
-                            * ak / (2*np.pi) * np.pad(aJ0, 1), ak)
-            int2 = simpson(np.pad(aPS, 1) * np.pad(aP2,1)
-                            * ak / (2*np.pi) * np.pad(aJ0, 1), ak)
-            res1, res2 = np.append(res1, int1), np.append(res2, int2)
-            e1h = np.abs((np.sum(res1) - r1h)/np.sum(res1))
-            e2h = np.abs((np.sum(res2) - r2h)/np.sum(res2))
-            r1h, r2h = np.sum(res1), np.sum(res2)
-            i += 1
-    if 0: #VERBOSE:
-        print(f'### z: {z} ###')
-        print(f'##### theta: {theta*206265} arcsec #####')
-        print(f'Integrating over {i} zeros of Bessel J0')
-        k_min = np.log10(np.min(k_array))
-        k_max_J0 = np.log10(special.jn_zeros(0, STEP_J0)[i]/ theta / comoving_distance_z)
-        print(f'Over a range of {k_min:.1e} < k < {k_max_J0:.1e}')
-        print(f'     Integral 1h: {r1h:.1e} \pm {e1h*100:.1e}%')
-        print(f'     Integral 2h: {r2h:.1e} \pm {e2h*100:.1e}%')
-    if APPROX_LARGE_K:
-        r1h = r1h + integral_P1gsJzero_from_largek(K_MIN, z, comoving_distance_z, theta)
-    return r1h, r2h, e1h, e2h
-
-def integrate_between_J_zeros_1halo(theta, z, comoving_distance_z,
-                                    _k_array, hmf_PS, PS_1,
-                                    STEP_J0 = 50_000, PRECISION = 0.01,
-                                    INTERPOLATION = False,
-                                    VERBOSE = False):
-    k_array = _k_array
-    j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
-    res1 = np.zeros(0)
-    k0 = j_0_zeros / theta / comoving_distance_z
-    mask_k = k_array < k0[0]
-    k_intr = np.append(k_array[mask_k], k0[0])
-    Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-    A_sp = splrep(k_intr, np.append(PS_1[mask_k], 0) * k_intr / (2*np.pi) * np.append(Bessel, 0), s=0, k=1)
-    res1 = np.append(res1, splint(0, k_intr[-1], A_sp))
-    i, FLAG_DENSITY = 0, True
-    r1h, e1h = 0, np.inf
-    while (e1h > PRECISION) and (i < STEP_J0-1) and FLAG_DENSITY:
-        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
-        k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
-        aPS, aP1, aJ0, ak = np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
-        Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-        aPS, aP1, aJ0, ak = hmf_PS[mask_k], PS_1[mask_k], Bessel, k_intr
-        if len(aPS) == 0: FLAG_DENSITY = False
-        else:
-            A_sp = splrep(ak, np.pad(aP1, 1)* ak / (2*np.pi) * np.pad(aJ0, 1), s=0, k=1)
-            res1 = np.append(res1, splint(0, ak[-1], A_sp))
-            e1h  = np.abs((np.sum(res1) - r1h)/np.sum(res1))
-            r1h  =  np.sum(res1)
-            i += 1
-    return r1h, e1h
-
-def integrate_between_J_zeros_2halo(theta, z, comoving_distance_z,
-                                    _k_array, hmf_PS, PS_2,
-                                    STEP_J0 = 50_000, PRECISION = 0.01,
-                                    INTERPOLATION = False,
-                                    VERBOSE = False):
-    k_array = _k_array
-    j_0_zeros = np.append(1e-4, special.jn_zeros(0, STEP_J0))
-    res2 = np.zeros(0)
-    k0 = j_0_zeros / theta / comoving_distance_z
-    mask_k = k_array < k0[0]
-    k_intr = np.append(k_array[mask_k], k0[0])
-    Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-    int2 = simpson(np.append(hmf_PS[mask_k], 0) * np.append(PS_2[mask_k],0)
-                    * k_intr / (2*np.pi) * np.append(Bessel, 0), k_intr)
-    res2 = np.append(res2, int2)
-    i, FLAG_DENSITY = 0, True
-    r2h, e2h = 0, np.inf
-    while (e2h > PRECISION) and (i < STEP_J0-1) and FLAG_DENSITY:
-        mask_k = np.logical_and(k_array> k0[i], k_array< k0[i+1])
-        k_intr = np.append(k0[i], np.append(k_array[mask_k], k0[i+1]))
-        aPS, aP2, aJ0, ak = np.zeros(0), np.zeros(0), np.zeros(0), np.zeros(0)
-        Bessel = np.array([special.j0(k*theta*comoving_distance_z) for k in k_array[mask_k]])
-        aPS, aP2, aJ0, ak = hmf_PS[mask_k], PS_2[mask_k], Bessel, k_intr
-        if len(aPS) == 0: FLAG_DENSITY = False
-        else:
-            int2 = simpson(np.pad(aPS, 1) * np.pad(aP2,1) * ak / (2*np.pi) * np.pad(aJ0, 1), ak)
-            res2 = np.append(res2, int2)
-            e2h  = np.abs((np.sum(res2) - r2h)/np.sum(res2))
-            r2h  =  np.sum(res2)
-            i += 1
-    return r2h, e2h
-
 def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NCEN, NSAT, U_FT,
                          k_array, hmf_PS, bias, STEP_J0 = 50_000, INTERPOLATION = True, VERBOSE = False):
     PS_1, PS_2 = PS_1_2h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias)
@@ -334,25 +143,30 @@ def omega_inner_integral(theta, z, comoving_distance_z, M_h_array, HMF_array, NC
     return R_T1 * N1, R_T2 * N2, 0, 0
 
 def omega_inner_integral_1halo(theta, z, comoving_distance_z, M_h_array, HMF_array, NCEN, NSAT, U_FT,
-                         k_array, hmf_PS, bias, STEP_J0 = 50_000, INTERPOLATION = True, VERBOSE = False):
+                         k_array, hmf_PS, bias, STEP_J0 = 100_000, INTERPOLATION = True, VERBOSE = False):
+    SPL_ORDER = 1
     PS_1 = PS_1h(M_h_array, HMF_array, NCEN, NSAT, U_FT, bias)
     N1   = np.max(PS_1)
     PS_1 = PS_1 / N1
-    hmf_PS_spl = splrep(k_array, hmf_PS, s=0, k=1)
-    PS_1_spl   = splrep(k_array, PS_1  , s=0, k=1)
+    PS_1_spl = splrep(k_array, PS_1  , s=0, k=SPL_ORDER)
     R_T1 = np.zeros(len(theta))
+    j_0_zeros = special.jn_zeros(0, STEP_J0+1)
     for it, t in enumerate(theta):
-        j_0min = k_array[0]*t*comoving_distance_z
-        j_0_zeros = np.append(j_0min, special.jn_zeros(0, STEP_J0))
-        i, DELTA_J0, RES_J0 = 0, 5_000, 16
+        k0 = j_0_zeros[0]/t/comoving_distance_z
+        k_here = np.append(k_array[k_array<k0], k0)
+        PS_1_here = splev(k_here, PS_1_spl)
+        Bessel = np.array([special.j0(k*t*comoving_distance_z) for k in k_here])
+        integrand = PS_1_here * k_here / (2*np.pi) * Bessel
+        A_sp = splrep(k_here, integrand, s=0, k=SPL_ORDER)
+        R_T1[it] += splint(k_here[0], k_here[-1], A_sp)
+        i, DELTA_J0, RES_J0 = 0, 10_000, 8
         while i <= STEP_J0 - DELTA_J0:
             j_array = np.linspace(j_0_zeros[i], j_0_zeros[i+DELTA_J0], DELTA_J0*RES_J0)
             k_here = j_array / t / comoving_distance_z
-            hmf_PS_here = splev(k_here, hmf_PS_spl)
             PS_1_here = splev(k_here, PS_1_spl)
             Bessel = np.array([special.j0(k*t*comoving_distance_z) for k in k_here])
-            integrand = hmf_PS_here * PS_1_here * k_here / (2*np.pi) * Bessel
-            A_sp = splrep(k_here, integrand, s=0, k=1)
+            integrand = PS_1_here * k_here / (2*np.pi) * Bessel
+            A_sp = splrep(k_here, integrand, s=0, k=SPL_ORDER)
             R_T1[it] += splint(k_here[0], k_here[-1], A_sp)
             i += DELTA_J0
     return R_T1 * N1, 0
@@ -705,7 +519,7 @@ def init_lookup_table(z, PRECOMP_UFT = False, REWRITE_TBLS = False, LOW_RES = Fa
     min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.001
     if LOW_RES:
         FOLDERPATH = _HERE_PATH + '/HOD/HMF_tables/LowRes/'
-        min_lnk, max_ln_k, step_lnk = -11.5, 13.6, 0.025
+        min_lnk, max_ln_k, step_lnk = -11.5, 16.6, 0.05
     if os.path.exists(FOLDERPATH):
         FPATH = FOLDERPATH+'redshift_'+str(int(z))+'_'+str(int(np.around(z%1,2)*100))+'.txt'
         if (os.path.isfile(FPATH) and not REWRITE_TBLS):

@@ -40,12 +40,25 @@ def omega_z_component_singleCore_1halo(z, args, tables_and_cosmo):
     M_h_array, HMF_array, k_array, hmf_PS, \
     U_FT, bias, comoving_distance_z = tables_and_cosmo
     if VERBOSE: print('len (M_h_array) @ z = ',z,' : ', len(M_h_array))
-    oz2, e2 = HOD.omega_inner_integral_1halo(theta, z, comoving_distance_z, M_h_array, HMF_array,
+    oz1, e1 = HOD.omega_inner_integral_1halo(theta, z, comoving_distance_z, M_h_array, HMF_array,
+                                        NCEN, NSAT, U_FT, k_array, hmf_PS, bias,
+                                        STEP_J0, INTERPOLATION, VERBOSE)
+    return oz1
+
+def omega_z_component_singleCore_2halo(z, args, tables_and_cosmo):
+    theta, M_DM_min, M_DM_max, \
+    NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, \
+    LOW_RES, STEP_J0, INTERPOLATION, VERBOSE = args
+    M_h_array, HMF_array, k_array, hmf_PS, \
+    U_FT, bias, comoving_distance_z = tables_and_cosmo
+    if VERBOSE: print('len (M_h_array) @ z = ',z,' : ', len(M_h_array))
+    oz2, e2 = HOD.omega_inner_integral_2halo(theta, z, comoving_distance_z, M_h_array, HMF_array,
                                         NCEN, NSAT, U_FT, k_array, hmf_PS, bias,
                                         STEP_J0, INTERPOLATION, VERBOSE)
     return oz2
 
-def omega_1halo_singleCore(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
+
+def omega_HOD_singleCore(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_array,
                             _tables_and_cosmo_, M_DM_min, M_DM_max,
                             PRECOMP_UFT = False, REWRITE_TBLS = False,
                             LOW_RES = False, STEP_J0 = 50_000, cores=None,
@@ -61,14 +74,17 @@ def omega_1halo_singleCore(theta, M_min, sigma_logM, M_sat, alpha, N_z_nrm, z_ar
     args = theta, M_DM_min, M_DM_max, \
             NCEN, NSAT, PRECOMP_UFT, REWRITE_TBLS, \
             LOW_RES, STEP_J0, INTERPOLATION, VERBOSE
-    itg = np.array([omega_z_component_singleCore_1halo(z, args, _tables_and_cosmo_[i])\
+    itg1 = np.array([omega_z_component_singleCore_1halo(z, args, _tables_and_cosmo_[i])\
+                    for i, z in enumerate(z_array)])
+    itg2 = np.array([omega_z_component_singleCore_2halo(z, args, _tables_and_cosmo_[i])\
                     for i, z in enumerate(z_array)])
 ################################################################################################################
     #TODO: this calls init_lookuptable again, should distirbute it in (or as in) the omega_z_component_parallel
     N_G = HOD.get_N_dens_avg(z_array, M_min, sigma_logM, M_sat, alpha, N_z_nrm,
                          LOW_RES = LOW_RES, int_M_min=np.power(10, M_DM_min), int_M_max=np.power(10, M_DM_max))
-    I1 = np.array([np.trapz(itg[:,i] * factor_z, z_array) for i in range(len(theta))])
-    return I1/ np.power(N_G, 2)
+    I1 = np.array([np.trapz(itg1[:,i] * factor_z, z_array) for i in range(len(theta))])
+    I2 = np.array([np.trapz(itg2[:,i] * factor_z, z_array) for i in range(len(theta))])
+    return I1/ np.power(N_G, 2), I2/ np.power(N_G, 2)
 
 def get_Mh_interval(mag_min = 0, mag_max = np.inf):
     if mag_min == 0 or mag_max == np.inf:
@@ -103,13 +119,14 @@ def log_likelihood(theta):
     logM_min, logM_sat = theta
     M_min, M_sat = np.power(10, logM_min), np.power(10, logM_sat)
     sigma_logM, alpha = 0.2, 1.0
-    o2_model = omega_1halo_singleCore(bin_centre/206265,
-                                        M_min, sigma_logM, M_sat, alpha,
-                                        N_norm, z_array,
-                                        _tables_and_cosmo_,
-                                        M_DM_min, M_DM_max,
-                                        LOW_RES=COARSE)
-    chi2 = np.power((o2_model-w_obs)/w_err,2)
+    o1_model, o2_model = omega_HOD_singleCore(bin_centre/206265,
+                                            M_min, sigma_logM, M_sat, alpha,
+                                            N_norm, z_array,
+                                            _tables_and_cosmo_,
+                                            M_DM_min, M_DM_max,
+                                            LOW_RES=COARSE)
+    o_model = o1_model + o2_model
+    chi2 = np.power((o_model-w_obs)/w_err,2)
     return np.sum(chi2)
 
 def log_prior(theta):
